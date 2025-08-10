@@ -291,6 +291,7 @@ class FaceRecognitionApp:
             if faceCascade.empty():
                 self.notification.config(text="Error: Could not load Haar cascade")
                 logging.error("Failed to load Haar cascade")
+                self.start_camera_preview()
                 return
 
             try:
@@ -315,55 +316,73 @@ class FaceRecognitionApp:
 
             col_names = ['Id', 'Name', 'Date', 'Time']
             attendance = pd.DataFrame(columns=col_names)
+            print("Starting face tracking...")
+
             while True:
                 ret, im = cam.read()
                 if not ret:
                     self.notification.config(text="Error: Failed to capture image")
                     logging.error("Failed to capture image")
                     break
+
                 gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
                 faces = faceCascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=4, minSize=(30, 30))
+
                 for (x, y, w, h) in faces:
                     cv2.rectangle(im, (x, y), (x+w, y+h), (225, 0, 0), 2)
                     Id, conf = recognizer.predict(gray[y:y+h, x:x+w])
+                    print(f"Detected Id: {Id} with confidence: {conf}")
+
                     if conf < 50:
                         ts = time.time()
                         date = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
                         timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
                         try:
-                            aa = df.loc[df['Id'] == Id]['Name'].iloc[0]  # Use iloc for efficiency
+                            aa = df.loc[df['Id'] == Id]['Name'].iloc[0]
                             tt = f"{Id}-{aa}"
-                            attendance.loc[len(attendance)] = [Id, aa, date, timeStamp]
+                            # Add attendance only once per session per ID
+                            if Id not in attendance['Id'].values:
+                                attendance.loc[len(attendance)] = [Id, aa, date, timeStamp]
+                                print(f"Attendance recorded for {aa} (ID: {Id}) at {date} {timeStamp}")
                         except IndexError:
                             tt = "Unknown"
                     else:
-                        Id = 'Unknown'
-                        tt = str(Id)
-                        if conf > 75:
-                            noOfFile = len(os.listdir("ImagesUnknown")) + 1
-                            os.makedirs("ImagesUnknown", exist_ok=True)
-                            cv2.imwrite(f"ImagesUnknown/Image{noOfFile}.jpg", im[y:y+h, x:x+w])
+                        tt = "Unknown"
+
                     cv2.putText(im, str(tt), (x, y+h), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                attendance = attendance.drop_duplicates(subset=['Id'], keep='first')
+
                 cv2.imshow('Tracking', im)
                 self.attendance_text.delete(1.0, tk.END)
-                self.attendance_text.insert(tk.END, attendance.to_string(index=False))  # Exclude index
-                if cv2.waitKey(30) == ord('q'):  # Reduced wait time
+                self.attendance_text.insert(tk.END, attendance.to_string(index=False))
+
+                if cv2.waitKey(30) == ord('q'):
+                    print("Stopping tracking loop")
                     break
-            ts = time.time()
-            date = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-            timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
-            Hour, Minute, Second = timeStamp.split(":")
-            fileName = f"Attendance/Attendance_{date}_{Hour}-{Minute}-{Second}.csv"
-            os.makedirs("Attendance", exist_ok=True)
-            attendance.to_csv(fileName, index=False)
+
+            if not attendance.empty:
+                ts = time.time()
+                date = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+                timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+                Hour, Minute, Second = timeStamp.split(":")
+                os.makedirs("Attendance", exist_ok=True)
+                fileName = f"Attendance/Attendance_{date}_{Hour}-{Minute}-{Second}.csv"
+                attendance.to_csv(fileName, index=False)
+                print(f"Attendance saved to {fileName}")
+                self.notification.config(text=f"Attendance saved to {fileName}")
+                logging.info(f"Attendance saved to {fileName}")
+            else:
+                print("No attendance to save.")
+                self.notification.config(text="No attendance recorded")
+                logging.info("No attendance recorded")
+
             cam.release()
             cv2.destroyAllWindows()
-            self.notification.config(text="Attendance Recorded")
-            logging.info("Attendance recorded")
             self.start_camera_preview()
 
         threading.Thread(target=track, daemon=True).start()
+
+
+
 
     def quit_app(self):
         if messagebox.askyesno("Quit", "Are you sure you want to quit?"):
